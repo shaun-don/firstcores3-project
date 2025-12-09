@@ -12,7 +12,8 @@ void setup() {
     CoreS3.Display.setTextSize(2);   // Set text size.
     CoreS3.Display.setCursor(0, 0);  // Set the cursor.
     delay(200);                      // Delay 200ms.
-    CoreS3.Imu.begin();              // Init IMU.
+    CoreS3.Imu.begin();    // Init IMU.
+    Serial.begin(9600);
 }
 //two two
 void loop() {
