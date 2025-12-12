@@ -1,11 +1,18 @@
 #include <M5Unified.h>
 
 // Complementary filter constants
-const float ALPHA = 0.98;  // Weight for gyroscope (0.98 = 98% gyro, 2% accel)
-const float DT = 0.01;     // Time step in seconds (10ms)
+const float ALPHA = 0.96;  // Weight for gyroscope integration
+const float GYRO_THRESHOLD = 0.5;  // Ignore small gyro movements (noise reduction)
+
+// Low-pass filter for smoothing
+const float SMOOTH_FACTOR = 0.9;  // Higher = smoother but slower response
 
 // Filtered orientation values
 float pitch = 0.0, roll = 0.0, yaw = 0.0;
+float pitch_smooth = 0.0, roll_smooth = 0.0, yaw_smooth = 0.0;
+
+// Previous time for dt calculation
+unsigned long lastTime = 0;
 
 // Magnetometer calibration values
 float mag_offset_x = 0.0, mag_offset_y = 0.0, mag_offset_z = 0.0;
@@ -16,26 +23,36 @@ bool calibrated = false;
 float mag_min_x = 10000, mag_min_y = 10000, mag_min_z = 10000;
 float mag_max_x = -10000, mag_max_y = -10000, mag_max_z = -10000;
 
+// Moving average for heading
+const int AVG_SAMPLES = 10;
+float yaw_buffer[AVG_SAMPLES];
+int yaw_index = 0;
+bool buffer_filled = false;
+
 void calibrateMagnetometer() {
   M5.Display.clear();
   M5.Display.setCursor(10, 60);
   M5.Display.setTextColor(YELLOW);
   M5.Display.println("Magnetometer Calibration");
   M5.Display.setCursor(10, 100);
-  M5.Display.println("Rotate device in");
+  M5.Display.println("Rotate device slowly");
   M5.Display.setCursor(10, 130);
-  M5.Display.println("figure-8 pattern");
+  M5.Display.println("in figure-8 pattern");
   M5.Display.setCursor(10, 160);
   M5.Display.println("Press button when done");
+  
+  // Reset min/max
+  mag_min_x = 10000; mag_min_y = 10000; mag_min_z = 10000;
+  mag_max_x = -10000; mag_max_y = -10000; mag_max_z = -10000;
   
   unsigned long startTime = millis();
   int samples = 0;
   
-  while (millis() - startTime < 20000) {  // 20 second calibration window
+  while (millis() - startTime < 20000) {
     M5.update();
     
     if (M5.BtnA.wasPressed()) {
-      break;  // Exit calibration early if button pressed
+      break;
     }
     
     auto imu_update = M5.Imu.update();
@@ -58,7 +75,7 @@ void calibrateMagnetometer() {
       M5.Display.printf("Samples: %d", samples);
     }
     
-    delay(10);
+    delay(50);  // Slower sampling during calibration
   }
   
   // Calculate offsets and scale factors
@@ -72,17 +89,61 @@ void calibrateMagnetometer() {
   
   float avg_range = (mag_range_x + mag_range_y + mag_range_z) / 3.0;
   
-  mag_scale_x = avg_range / mag_range_x;
-  mag_scale_y = avg_range / mag_range_y;
-  mag_scale_z = avg_range / mag_range_z;
+  if (mag_range_x > 0) mag_scale_x = avg_range / mag_range_x;
+  if (mag_range_y > 0) mag_scale_y = avg_range / mag_range_y;
+  if (mag_range_z > 0) mag_scale_z = avg_range / mag_range_z;
   
   calibrated = true;
+  
+  // Reset moving average buffer
+  buffer_filled = false;
+  yaw_index = 0;
   
   M5.Display.clear();
   M5.Display.setTextColor(GREEN);
   M5.Display.setCursor(10, 100);
   M5.Display.println("Calibration Complete!");
   delay(2000);
+}
+
+float movingAverageYaw(float new_yaw) {
+  // Handle 0/360 degree wraparound
+  if (buffer_filled) {
+    float avg = 0;
+    for (int i = 0; i < AVG_SAMPLES; i++) {
+      avg += yaw_buffer[i];
+    }
+    avg /= AVG_SAMPLES;
+    
+    // Check for wraparound
+    if (abs(new_yaw - avg) > 180) {
+      if (new_yaw < 180) {
+        new_yaw += 360;
+      }
+    }
+  }
+  
+  yaw_buffer[yaw_index] = new_yaw;
+  yaw_index = (yaw_index + 1) % AVG_SAMPLES;
+  
+  if (yaw_index == 0) {
+    buffer_filled = true;
+  }
+  
+  // Calculate average
+  float sum = 0;
+  int count = buffer_filled ? AVG_SAMPLES : yaw_index;
+  for (int i = 0; i < count; i++) {
+    sum += yaw_buffer[i];
+  }
+  
+  float result = sum / count;
+  
+  // Normalize back to 0-360
+  while (result >= 360) result -= 360;
+  while (result < 0) result += 360;
+  
+  return result;
 }
 
 void setup() {
@@ -113,6 +174,17 @@ void setup() {
   }
   
   M5.Display.clear();
+  lastTime = millis();
+  
+  // Initialize first reading
+  auto imu_update = M5.Imu.update();
+  if (imu_update) {
+    auto data = M5.Imu.getImuData();
+    pitch = atan2(data.accel.y, sqrt(data.accel.x * data.accel.x + data.accel.z * data.accel.z)) * 180.0 / PI;
+    roll = atan2(-data.accel.x, data.accel.z) * 180.0 / PI;
+    pitch_smooth = pitch;
+    roll_smooth = roll;
+  }
 }
 
 void loop() {
@@ -121,11 +193,15 @@ void loop() {
   // Check if button pressed to recalibrate
   if (M5.BtnA.wasPressed()) {
     calibrateMagnetometer();
+    lastTime = millis();
   }
   
-  static unsigned long lastTime = millis();
   unsigned long currentTime = millis();
   float dt = (currentTime - lastTime) / 1000.0;
+  
+  // Limit dt to prevent issues
+  if (dt > 0.1) dt = 0.01;
+  
   lastTime = currentTime;
   
   auto imu_update = M5.Imu.update();
@@ -137,9 +213,17 @@ void loop() {
     float accel_pitch = atan2(data.accel.y, sqrt(data.accel.x * data.accel.x + data.accel.z * data.accel.z)) * 180.0 / PI;
     float accel_roll = atan2(-data.accel.x, data.accel.z) * 180.0 / PI;
     
-    // Integrate gyroscope data (convert from deg/s to degrees)
-    pitch = ALPHA * (pitch + data.gyro.x * dt) + (1.0 - ALPHA) * accel_pitch;
-    roll = ALPHA * (roll + data.gyro.y * dt) + (1.0 - ALPHA) * accel_roll;
+    // Apply gyro threshold to reduce noise
+    float gyro_x = (abs(data.gyro.x) > GYRO_THRESHOLD) ? data.gyro.x : 0;
+    float gyro_y = (abs(data.gyro.y) > GYRO_THRESHOLD) ? data.gyro.y : 0;
+    
+    // Complementary filter
+    pitch = ALPHA * (pitch + gyro_x * dt) + (1.0 - ALPHA) * accel_pitch;
+    roll = ALPHA * (roll + gyro_y * dt) + (1.0 - ALPHA) * accel_roll;
+    
+    // Additional low-pass smoothing
+    pitch_smooth = SMOOTH_FACTOR * pitch_smooth + (1.0 - SMOOTH_FACTOR) * pitch;
+    roll_smooth = SMOOTH_FACTOR * roll_smooth + (1.0 - SMOOTH_FACTOR) * roll;
     
     // Apply magnetometer calibration
     float mag_x = (data.mag.x - mag_offset_x) * mag_scale_x;
@@ -147,21 +231,24 @@ void loop() {
     float mag_z = (data.mag.z - mag_offset_z) * mag_scale_z;
     
     // Tilt compensation for heading
-    float pitch_rad = pitch * PI / 180.0;
-    float roll_rad = roll * PI / 180.0;
+    float pitch_rad = pitch_smooth * PI / 180.0;
+    float roll_rad = roll_smooth * PI / 180.0;
     
     float mag_x_comp = mag_x * cos(pitch_rad) + mag_z * sin(pitch_rad);
     float mag_y_comp = mag_x * sin(roll_rad) * sin(pitch_rad) + 
                        mag_y * cos(roll_rad) - 
                        mag_z * sin(roll_rad) * cos(pitch_rad);
     
-    // Calculate heading (yaw) with tilt compensation
-    yaw = atan2(mag_y_comp, mag_x_comp) * 180.0 / PI;
+    // Calculate raw heading
+    float yaw_raw = atan2(mag_y_comp, mag_x_comp) * 180.0 / PI;
     
-    // Normalize heading to 0-360 degrees
-    if (yaw < 0) {
-      yaw += 360.0;
+    // Normalize to 0-360
+    if (yaw_raw < 0) {
+      yaw_raw += 360.0;
     }
+    
+    // Apply moving average
+    yaw_smooth = movingAverageYaw(yaw_raw);
     
     // Display on screen
     M5.Display.clear();
@@ -178,13 +265,13 @@ void loop() {
     
     M5.Display.setTextColor(WHITE);
     M5.Display.setCursor(10, 40);
-    M5.Display.printf("Heading: %.1f deg", yaw);
+    M5.Display.printf("Heading: %.1f deg", yaw_smooth);
     
     M5.Display.setCursor(10, 80);
-    M5.Display.printf("Pitch:   %.1f deg", pitch);
+    M5.Display.printf("Pitch:   %.1f deg", pitch_smooth);
     
     M5.Display.setCursor(10, 120);
-    M5.Display.printf("Roll:    %.1f deg", roll);
+    M5.Display.printf("Roll:    %.1f deg", roll_smooth);
     
     // Visual compass indicator
     int centerX = 270;
@@ -201,7 +288,7 @@ void loop() {
     M5.Display.print("N");
     
     // Draw heading line
-    float heading_rad = yaw * PI / 180.0;
+    float heading_rad = yaw_smooth * PI / 180.0;
     int lineX = centerX + radius * 0.8 * sin(heading_rad);
     int lineY = centerY - radius * 0.8 * cos(heading_rad);
     M5.Display.drawLine(centerX, centerY, lineX, lineY, RED);
@@ -213,5 +300,5 @@ void loop() {
     M5.Display.print("Press Btn A to (re)calibrate");
   }
   
-  delay(10);
+  delay(20);  // Slower update rate for stability
 }
