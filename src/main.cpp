@@ -3,7 +3,7 @@
 // Complementary filter constants
 const float ALPHA = 0.96;  // Weight for gyroscope integration
 const float GYRO_THRESHOLD = 0.5;  // Ignore small gyro movements (noise reduction)
-
+//ff
 // Low-pass filter for smoothing
 const float SMOOTH_FACTOR = 0.9;  // Higher = smoother but slower response
 
