@@ -10,7 +10,7 @@ const float SMOOTH_FACTOR = 0.9;  // Higher = smoother but slower response
 // Filtered orientation values
 float pitch = 0.0, roll = 0.0, yaw = 0.0;
 float pitch_smooth = 0.0, roll_smooth = 0.0, yaw_smooth = 0.0;
-
+//6
 // Previous time for dt calculation
 unsigned long lastTime = 0;
 
