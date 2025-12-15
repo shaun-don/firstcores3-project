@@ -13,7 +13,7 @@ float pitch_smooth = 0.0, roll_smooth = 0.0, yaw_smooth = 0.0;
 //6
 // Previous time for dt calculation
 unsigned long lastTime = 0;
-
+//7
 // Magnetometer calibration values
 float mag_offset_x = 0.0, mag_offset_y = 0.0, mag_offset_z = 0.0;
 float mag_scale_x = 1.0, mag_scale_y = 1.0, mag_scale_z = 1.0;
