@@ -1,5 +1,5 @@
 #include <M5Unified.h>
-//this morning
+//this morning - later upstair
 // Complementary filter constants
 const float ALPHA = 0.96;  // Weight for gyroscope integration
 const float GYRO_THRESHOLD = 0.5;  // Ignore small gyro movements (noise reduction)
